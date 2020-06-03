@@ -95,9 +95,8 @@ func GitLab() {
 			}, Keyboard{
 				Title: "View on " + config.GitLab.URL,
 				URL: fmt.Sprintf(
-					"https://%s/%s/-/commit/%s",
-					config.GitLab.URL,
-					event.Project.NameWithNamespace,
+					"%s/-/commit/%s",
+					event.Project.WebURL,
 					event.PushData.CommitTo,
 				),
 			}
