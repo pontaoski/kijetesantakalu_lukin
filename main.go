@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/alecthomas/repr"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 )
 
@@ -34,18 +35,38 @@ func main() {
 			TelegramPaginatorHandler(update.CallbackQuery.Message.MessageID, update.CallbackQuery.Data)
 		}
 		if update.Message != nil {
-			if strings.HasPrefix(update.Message.Text, "let subscriptions = [") && strings.HasSuffix(update.Message.Text, "]") {
-				split := strings.Split(strings.TrimPrefix(strings.TrimSuffix(update.Message.Text, "]"), "let subscriptions = ["), ",")
+			if strings.HasPrefix(update.Message.Text, "repr.Println(chatData)") {
+				chat := GetChat(update.Message.Chat.ID)
+				telegramBot.queue <- tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("<pre><code>%s</code></pre>", repr.String(chat)))
+			}
+			const prefix = "chatData.subscriptions := []string{"
+			const suffix = "}"
+			if strings.HasPrefix(update.Message.Text, prefix) && strings.HasSuffix(update.Message.Text, suffix) {
+				split := strings.Split(strings.TrimPrefix(strings.TrimSuffix(update.Message.Text, suffix), prefix), ",")
 				var cleaned []string
 				for _, str := range split {
-					cleaned = append(cleaned, strings.TrimSpace(str))
+					cleaned = append(cleaned, strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(str), "\""), "\""))
 				}
-				data, err := json.Marshal(cleaned)
+				var groups []string
+				var projects []string
+				for _, cleanedStr := range cleaned {
+					if strings.Contains(cleanedStr, "/") {
+						projects = append(projects, cleanedStr)
+					} else {
+						groups = append(groups, cleanedStr)
+					}
+				}
+				gData, err := json.Marshal(groups)
+				if err != nil {
+					telegramBot.queue <- tgbotapi.NewMessage(update.Message.Chat.ID, "Sorry, there was an error marshalling data: "+err.Error())
+				}
+				pData, err := json.Marshal(projects)
 				if err != nil {
 					telegramBot.queue <- tgbotapi.NewMessage(update.Message.Chat.ID, "Sorry, there was an error marshalling data: "+err.Error())
 				}
 				chat := GetChat(update.Message.Chat.ID)
-				chat.UpdateData(string(data))
+				chat.UpdateGroupData(string(gData))
+				chat.UpdateProjectData(string(pData))
 				telegramBot.queue <- tgbotapi.NewMessage(update.Message.Chat.ID, "Subscriptions updated!\n")
 			}
 			if update.Message.ForwardFromChat != nil {

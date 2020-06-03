@@ -6,8 +6,9 @@ import (
 )
 
 type Chat struct {
-	ID   int64 `gorm:"primary_key,auto_increment:false"`
-	Data string
+	ID          int64 `gorm:"primary_key,auto_increment:false"`
+	ProjectData string
+	GroupData   string
 }
 
 type PostedCommit struct {
@@ -45,13 +46,18 @@ func GetChats() (ret []Chat) {
 func GetChat(ID int64) (ret Chat) {
 	db.First(&ret, "id = ?", ID)
 	if (ret == Chat{}) {
-		db.Create(Chat{ID, ""})
-		ret = Chat{ID, ""}
+		db.Create(Chat{ID, "", ""})
+		ret = Chat{ID, "", ""}
 	}
 	return
 }
 
-func (c *Chat) UpdateData(data string) {
-	db.Model(*c).Update("data", data)
-	c.Data = data
+func (c *Chat) UpdateProjectData(data string) {
+	db.Model(*c).Update("project_data", data)
+	c.ProjectData = data
+}
+
+func (c *Chat) UpdateGroupData(data string) {
+	db.Model(*c).Update("group_data", data)
+	c.GroupData = data
 }

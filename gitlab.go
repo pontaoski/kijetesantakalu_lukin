@@ -106,13 +106,24 @@ func GitLab() {
 					telegramBot.SendMessage(channel.ID, data, keyboard)
 				}
 			}
-			var chats map[int64][]string = make(map[int64][]string)
+			var chatGroups map[int64][]string = make(map[int64][]string)
+			var chatProjects map[int64][]string = make(map[int64][]string)
 			for _, chat := range GetChats() {
 				var projects []string
-				json.Unmarshal([]byte(chat.Data), &projects)
-				chats[chat.ID] = projects
+				var groups []string
+				json.Unmarshal([]byte(chat.ProjectData), &projects)
+				chatProjects[chat.ID] = projects
+				json.Unmarshal([]byte(chat.GroupData), &groups)
+				chatGroups[chat.ID] = groups
 			}
-			for chat, projects := range chats {
+			for chat, groups := range chatGroups {
+				for _, subGroup := range groups {
+					if subGroup == event.Group {
+						telegramBot.SendMessage(chat, data, keyboard)
+					}
+				}
+			}
+			for chat, projects := range chatProjects {
 				for _, subProject := range projects {
 					if subProject == event.Project.PathWithNamespace {
 						telegramBot.SendMessage(chat, data, keyboard)
