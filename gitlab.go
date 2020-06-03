@@ -1,18 +1,60 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/xanzy/go-gitlab"
+	"golang.org/x/time/rate"
 )
 
 var client *gitlab.Client
 
 var sort = "asc"
 var tenpo = time.Minute / 100
+
+type Event struct {
+	Group   string
+	Project *gitlab.Project
+	*gitlab.ContributionEvent
+}
+
+var eventsChan = make(chan Event, 100)
+var limiter = rate.NewLimiter(rate.Every(tenpo), 100)
+var ctx = context.Background()
+
+func GitlabReader() {
+	sort := "desc"
+	eType := gitlab.PushedEventType
+	for _, group := range allGroups {
+		go func(group string) {
+			limiter.Wait(ctx)
+			projects, resp, err := client.Groups.ListGroupProjects(group, nil)
+			if err != nil {
+				fmt.Printf("%+v\n", err)
+				fmt.Printf("%+v\n", resp)
+				return
+			}
+			for _, project := range projects {
+				go func(project *gitlab.Project) {
+					limiter.Wait(ctx)
+					events, resp, err := client.Events.ListProjectVisibleEvents(project.ID, &gitlab.ListContributionEventsOptions{Action: &eType, Sort: &sort})
+					if err != nil {
+						fmt.Printf("%+v\n", err)
+						fmt.Printf("%+v\n", resp)
+						return
+					}
+					for _, event := range events {
+						eventsChan <- Event{group, project, event}
+					}
+				}(project)
+			}
+		}(group)
+	}
+}
 
 func GitLab() {
 	var err error
@@ -21,74 +63,59 @@ func GitLab() {
 		panic(err)
 	}
 	println("GitLab handler is now running...")
-outer:
+	go GitlabReader()
 	for {
-		for _, group := range config.GitLab.Groups {
-			projects, resp, err := client.Groups.ListGroupProjects(group, nil)
-			if err != nil {
-				fmt.Printf("%+v\n", err)
-				fmt.Printf("%+v\n", resp)
-				time.Sleep(tenpo)
-				continue outer
+		select {
+		case event := <-eventsChan:
+			if strings.HasPrefix(event.PushData.CommitTitle, "GIT_SILENT") ||
+				strings.HasPrefix(event.PushData.CommitTitle, "SVN_SILENT") ||
+				strings.HasPrefix(event.PushData.Ref, "work/") {
+				continue
 			}
-			for _, project := range projects {
-				val := gitlab.PushedEventType
-				events, resp, err := client.Events.ListProjectVisibleEvents(project.ID, &gitlab.ListContributionEventsOptions{Action: &val, Sort: &sort})
-				if err != nil {
-					fmt.Printf("%+v\n", err)
-					fmt.Printf("%+v\n", resp)
-					time.Sleep(tenpo)
-					continue outer
+			if event.PushData.CommitTitle == "" || event.PushData.CommitTo == "" {
+				continue
+			}
+			if !TrackCommit(event.PushData.CommitTo, event.Project.NameWithNamespace) {
+				continue
+			}
+			data, keyboard := Embed{
+				Title: EmbedHeader{
+					Text: fmt.Sprintf("New commit from %s in %s", event.AuthorUsername, event.Project.NameWithNamespace),
+				},
+				Fields: []EmbedField{
+					{
+						Title: "Title",
+						Body:  event.PushData.CommitTitle,
+					},
+					{
+						Title: "Branch",
+						Body:  event.PushData.Ref,
+					},
+				},
+			}, Keyboard{
+				Title: "View on " + config.GitLab.URL,
+				URL: fmt.Sprintf(
+					"https://%s/%s/-/commit/%s",
+					config.GitLab.URL,
+					event.Project.NameWithNamespace,
+					event.PushData.CommitTo,
+				),
+			}
+			for _, channel := range config.Telegram.Channels {
+				if Contains(channel.Groups, event.Group) || Contains(channel.Projects, event.Project.NameWithNamespace) {
+					telegramBot.SendMessage(channel.ID, data, keyboard)
 				}
-				var chats map[int64][]string = make(map[int64][]string)
-				for _, chat := range GetChats() {
-					var projects []string
-					json.Unmarshal([]byte(chat.Data), &projects)
-					chats[chat.ID] = projects
-				}
-			eventsLoop:
-				for _, event := range events {
-					if strings.HasPrefix(event.PushData.CommitTitle, "GIT_SILENT") ||
-						strings.HasPrefix(event.PushData.CommitTitle, "SVN_SILENT") ||
-						strings.HasPrefix(event.PushData.Ref, "work/") {
-						continue eventsLoop
-					}
-					if event.PushData.CommitTitle == "" || event.PushData.CommitTo == "" {
-						continue eventsLoop
-					}
-					if !TrackCommit(event.PushData.CommitTo, project.NameWithNamespace) {
-						continue eventsLoop
-					}
-					data, keyboard := Embed{
-						Title: EmbedHeader{
-							Text: fmt.Sprintf("New commit from %s in %s", event.AuthorUsername, project.PathWithNamespace),
-						},
-						Fields: []EmbedField{
-							{
-								Title: "Title",
-								Body:  event.PushData.CommitTitle,
-							},
-							{
-								Title: "Branch",
-								Body:  event.PushData.Ref,
-							},
-						},
-					}, Keyboard{
-						Title: "View on " + config.GitLab.URL,
-						URL: fmt.Sprintf(
-							"https://%s/%s/-/commit/%s",
-							config.GitLab.URL,
-							project.PathWithNamespace,
-							event.PushData.CommitTo,
-						),
-					}
-					telegramBot.SendMessage(config.Telegram.Channel, data, keyboard)
-					for chat, projects := range chats {
-						for _, subProject := range projects {
-							if subProject == project.PathWithNamespace {
-								telegramBot.SendMessage(chat, data, keyboard)
-							}
-						}
+			}
+			var chats map[int64][]string = make(map[int64][]string)
+			for _, chat := range GetChats() {
+				var projects []string
+				json.Unmarshal([]byte(chat.Data), &projects)
+				chats[chat.ID] = projects
+			}
+			for chat, projects := range chats {
+				for _, subProject := range projects {
+					if subProject == event.Project.PathWithNamespace {
+						telegramBot.SendMessage(chat, data, keyboard)
 					}
 				}
 			}

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
-	"golang.org/x/time/rate"
 )
 
 var telegramBot Bot
@@ -15,7 +14,7 @@ func main() {
 	fmt.Println("Initializing kijetesantakalu lukin...")
 
 	bot, err := tgbotapi.NewBotAPI(config.Telegram.Token)
-	telegramBot = Bot{bot, make(chan tgbotapi.MessageConfig, 1024), rate.NewLimiter(5, 5)}
+	telegramBot = NewBot(bot)
 	if err != nil {
 		fmt.Println("Error creating Telegram session: ", err.Error())
 		return

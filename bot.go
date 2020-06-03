@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"golang.org/x/time/rate"
@@ -12,8 +11,9 @@ import (
 
 type Bot struct {
 	*tgbotapi.BotAPI
-	queue   chan tgbotapi.MessageConfig
-	limiter *rate.Limiter
+	queue       chan tgbotapi.MessageConfig
+	globalLimit *rate.Limiter
+	limits      map[int64]*rate.Limiter
 }
 
 func telegramEmbed(d Embed) tgbotapi.MessageConfig {
@@ -34,18 +34,40 @@ func telegramEmbed(d Embed) tgbotapi.MessageConfig {
 	return msg
 }
 
+func NewBot(bot *tgbotapi.BotAPI) Bot {
+	ret := Bot{}
+	ret.BotAPI = bot
+	ret.queue = make(chan tgbotapi.MessageConfig, 1024)
+	ret.globalLimit = rate.NewLimiter(10, 1)
+	ret.limits = make(map[int64]*rate.Limiter)
+	return ret
+}
+
+func (b *Bot) GetLimiter(chatID int64) *rate.Limiter {
+	if val, ok := b.limits[chatID]; ok {
+		return val
+	}
+	b.limits[chatID] = rate.NewLimiter(0.25, 1)
+	return b.limits[chatID]
+}
+
 func (b *Bot) QueueLoop() {
 	for {
 		select {
 		case msg := <-b.queue:
-			b.limiter.Wait(context.Background())
-			b.Send(msg)
+			go func(msg tgbotapi.MessageConfig) {
+				b.globalLimit.Wait(context.Background())
+				b.GetLimiter(msg.ChatID).Wait(context.Background())
+				_, err := b.Send(msg)
+				if err != nil {
+					println(err.Error())
+				}
+			}(msg)
 		}
 	}
 }
 
 func (b *Bot) SendMessage(chatID int64, content interface{}, keyboards ...Keyboard) {
-	time.Sleep(time.Second / 4)
 	switch content.(type) {
 	case string:
 		b.queue <- tgbotapi.NewMessage(chatID, content.(string))
